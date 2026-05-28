@@ -1,36 +1,64 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Mazhar Rehman — Portfolio
+
+Premium, animated personal portfolio built with **Next.js**, **Tailwind CSS**, **Framer Motion**, **GSAP ScrollTrigger**, **Lenis**, and **React Three Fiber**.
+
+## Stack
+
+- Next.js 16 (App Router)
+- Tailwind CSS 4
+- Framer Motion
+- GSAP + ScrollTrigger
+- Lenis smooth scroll
+- Three.js / React Three Fiber
 
 ## Getting Started
 
-First, run the development server:
-
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Build
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run build
+npm start
+```
 
-## Learn More
+## Contact form (Hostinger Titan email)
 
-To learn more about Next.js, take a look at the following resources:
+Create `.env.local` in the project root:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```env
+SMTP_HOST=smtp.titan.email
+SMTP_PORT=465
+SMTP_USER=mazhar@lancerstech.com
+SMTP_PASSWORD=your_titan_email_password
+SMTP_FROM=mazhar@lancerstech.com
+CONTACT_TO=mazhar@lancerstech.com
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+**Password kahan se milega:** Hostinger → **Emails** → `mazhar@lancerstech.com` → **Connect apps** / **Configure** → SMTP password (apna email login password).
 
-## Deploy on Vercel
+Restart dev server after saving: `npm run dev`
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+**Production (Vercel/Hostinger):** same variables in hosting dashboard Environment Variables.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Customization
+
+- **Content**: Edit `src/lib/data.ts`
+- **CV download**: `public/Mazhar_Rehman_CV.pdf` (linked from Hero)
+- **Colors & theme**: `src/app/globals.css`
+
+## Features
+
+- Full-screen scroll-snap sections with cinematic left/right transitions
+- Animated loading screen
+- 3D hero scene (desktop) with lazy loading
+- Glassmorphism UI, particle background, cyber grid
+- Filterable project showcase
+- GSAP timeline & scroll animations
+- SEO metadata in `src/app/layout.tsx`
+- Mobile-optimized (reduced 3D on small screens)
