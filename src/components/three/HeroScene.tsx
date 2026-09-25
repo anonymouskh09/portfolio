@@ -1,340 +1,300 @@
 "use client";
 
-import { useRef, useMemo, Suspense, useEffect } from "react";
+import { useRef, useMemo, Suspense, useEffect, useState } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
-import { Float } from "@react-three/drei";
+import {
+  Float,
+  MeshDistortMaterial,
+  PerformanceMonitor,
+  RoundedBox,
+  Sparkles,
+} from "@react-three/drei";
 import * as THREE from "three";
 import { usePrefersReducedMotion } from "@/lib/hooks/useMediaQuery";
 
-/* ─── Shared mouse (one listener for whole scene) ─── */
-function useMouseParallax() {
-  const mouse = useRef({ x: 0, y: 0 });
+type Vec2Ref = React.RefObject<{ x: number; y: number }>;
+
+/* ─── Pointer + scroll tracking (one listener each for the whole scene) ─── */
+function useSceneInputs() {
+  const pointer = useRef({ x: 0, y: 0 });
+  const scroll = useRef({ x: 0, y: 0 }); // y = 0..1 progress through the first viewport
+
   useEffect(() => {
-    const onMove = (e: MouseEvent) => {
-      mouse.current.x = (e.clientX / window.innerWidth - 0.5) * 2;
-      mouse.current.y = -(e.clientY / window.innerHeight - 0.5) * 2;
+    const onMove = (e: PointerEvent) => {
+      pointer.current.x = (e.clientX / window.innerWidth - 0.5) * 2;
+      pointer.current.y = -(e.clientY / window.innerHeight - 0.5) * 2;
     };
-    window.addEventListener("mousemove", onMove, { passive: true });
-    return () => window.removeEventListener("mousemove", onMove);
+    const container = document.getElementById("scroll-container");
+    const onScroll = () => {
+      if (!container) return;
+      scroll.current.y = Math.min(1, container.scrollTop / window.innerHeight);
+    };
+    window.addEventListener("pointermove", onMove, { passive: true });
+    container?.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      container?.removeEventListener("scroll", onScroll);
+    };
   }, []);
-  return mouse;
+
+  return { pointer, scroll };
 }
 
-/* ─── Animated terminal screen lines ─── */
-const CODE_LINES = [
-  { w: 1.1, color: "#22d3ee", y: 0.32 },
-  { w: 0.85, color: "#a78bfa", y: 0.14 },
-  { w: 0.95, color: "#60a5fa", y: -0.04 },
-  { w: 0.7, color: "#f472b6", y: -0.22 },
-  { w: 0.55, color: "#34d399", y: -0.38 },
-];
+/* ─── Glowing distorted core wrapped in a wireframe shell ─── */
+function Core({ compact }: { compact: boolean }) {
+  const shell = useRef<THREE.Mesh>(null);
+  const inner = useRef<THREE.Mesh>(null);
 
-function CodeScreen() {
-  const group = useRef<THREE.Group>(null);
-
-  useFrame((state) => {
-    if (!group.current) return;
+  useFrame((state, delta) => {
     const t = state.clock.elapsedTime;
-    group.current.children.forEach((child, i) => {
-      if (child instanceof THREE.Mesh) {
-        const mat = child.material as THREE.MeshBasicMaterial;
-        mat.opacity = 0.55 + Math.sin(t * 2 + i * 0.8) * 0.35;
-      }
-    });
+    if (shell.current) {
+      shell.current.rotation.x += delta * 0.12;
+      shell.current.rotation.y -= delta * 0.18;
+    }
+    if (inner.current) {
+      inner.current.rotation.y += delta * 0.25;
+      const s = 1 + Math.sin(t * 1.4) * 0.03;
+      inner.current.scale.setScalar(s);
+    }
   });
 
   return (
-    <group ref={group} position={[0, 0.02, 0.026]}>
-      {CODE_LINES.map((line, i) => (
-        <mesh key={i} position={[-0.42 + line.w / 2, line.y, 0]}>
-          <boxGeometry args={[line.w, 0.055, 0.01]} />
-          <meshBasicMaterial color={line.color} transparent opacity={0.8} />
-        </mesh>
-      ))}
-      {/* Cursor blink */}
-      <mesh position={[0.52, -0.38, 0.015]}>
-        <boxGeometry args={[0.04, 0.055, 0.01]} />
-        <meshBasicMaterial color="#22d3ee" />
+    <Float speed={1.4} rotationIntensity={0.4} floatIntensity={0.6}>
+      <mesh ref={inner}>
+        <icosahedronGeometry args={[0.95, compact ? 12 : 24]} />
+        <MeshDistortMaterial
+          color="#3b82f6"
+          emissive="#1d4ed8"
+          emissiveIntensity={0.35}
+          roughness={0.25}
+          metalness={0.3}
+          distort={0.4}
+          speed={2}
+        />
+      </mesh>
+      <mesh ref={shell} scale={1.42}>
+        <icosahedronGeometry args={[1, 1]} />
+        <meshBasicMaterial color="#22d3ee" wireframe transparent opacity={0.28} />
+      </mesh>
+      {/* Soft halo */}
+      <mesh scale={1.9}>
+        <sphereGeometry args={[1, 32, 32]} />
+        <meshBasicMaterial
+          color="#6366f1"
+          transparent
+          opacity={0.06}
+          side={THREE.BackSide}
+          depthWrite={false}
+        />
+      </mesh>
+    </Float>
+  );
+}
+
+/* ─── Tilted orbit rings, each with a comet travelling along it ─── */
+const RINGS = [
+  { r: 1.9, tilt: [1.2, 0.2, 0], color: "#22d3ee", speed: 0.7 },
+  { r: 2.25, tilt: [0.4, 0.9, 0.3], color: "#a78bfa", speed: -0.5 },
+  { r: 2.6, tilt: [1.8, -0.5, 0.6], color: "#f472b6", speed: 0.35 },
+] as const;
+
+function OrbitRing({
+  r,
+  tilt,
+  color,
+  speed,
+}: (typeof RINGS)[number]) {
+  const comet = useRef<THREE.Mesh>(null);
+
+  useFrame((state) => {
+    if (!comet.current) return;
+    const a = state.clock.elapsedTime * speed;
+    comet.current.position.set(Math.cos(a) * r, Math.sin(a) * r, 0);
+  });
+
+  return (
+    <group rotation={tilt as unknown as [number, number, number]}>
+      <mesh>
+        <torusGeometry args={[r, 0.006, 8, 160]} />
+        <meshBasicMaterial color={color} transparent opacity={0.35} />
+      </mesh>
+      <mesh ref={comet}>
+        <sphereGeometry args={[0.055, 16, 16]} />
+        <meshBasicMaterial color={color} />
       </mesh>
     </group>
   );
 }
 
-/* ─── Monitor + keyboard workstation ─── */
-function DevWorkstation({ mouse }: { mouse: React.RefObject<{ x: number; y: number }> }) {
-  const rig = useRef<THREE.Group>(null);
+/* ─── Floating tech chips ─── */
+const CHIPS = [
+  { color: "#61dafb", pos: [-2.5, 1.2, -0.4] },
+  { color: "#8b5cf6", pos: [2.6, 1.0, -0.8] },
+  { color: "#22c55e", pos: [-2.2, -1.2, 0.4] },
+  { color: "#f97316", pos: [2.3, -1.1, 0.2] },
+  { color: "#ec4899", pos: [0.2, 2.0, -1.2] },
+  { color: "#06b6d4", pos: [-0.4, -2.0, -0.6] },
+] as const;
 
-  useFrame((state) => {
-    if (!rig.current) return;
-    rig.current.rotation.y = THREE.MathUtils.lerp(
-      rig.current.rotation.y,
-      mouse.current.x * 0.35,
-      0.04
-    );
-    rig.current.rotation.x = THREE.MathUtils.lerp(
-      rig.current.rotation.x,
-      mouse.current.y * 0.15,
-      0.04
-    );
-    rig.current.position.y = Math.sin(state.clock.elapsedTime * 0.7) * 0.06;
-  });
-
+function TechChips({ compact }: { compact: boolean }) {
+  const list = compact ? CHIPS.slice(0, 4) : CHIPS;
   return (
-    <group ref={rig}>
-      <Float speed={1.2} rotationIntensity={0.15} floatIntensity={0.25}>
-        {/* Monitor stand */}
-        <mesh position={[0, -0.42, 0]}>
-          <boxGeometry args={[0.12, 0.35, 0.12]} />
-          <meshStandardMaterial color="#1e293b" metalness={0.7} roughness={0.3} />
-        </mesh>
-        <mesh position={[0, -0.62, 0]}>
-          <boxGeometry args={[0.7, 0.04, 0.45]} />
-          <meshStandardMaterial color="#0f172a" metalness={0.8} roughness={0.2} />
-        </mesh>
-
-        {/* Monitor frame */}
-        <mesh position={[0, 0.15, 0]}>
-          <boxGeometry args={[1.85, 1.15, 0.07]} />
-          <meshStandardMaterial color="#0f172a" metalness={0.85} roughness={0.15} />
-        </mesh>
-
-        {/* Screen glow */}
-        <mesh position={[0, 0.15, 0.038]}>
-          <planeGeometry args={[1.62, 0.98]} />
-          <meshBasicMaterial color="#1d4ed8" transparent opacity={0.12} />
-        </mesh>
-
-        {/* Screen surface */}
-        <mesh position={[0, 0.15, 0.04]}>
-          <planeGeometry args={[1.58, 0.94]} />
-          <meshStandardMaterial
-            color="#020617"
-            emissive="#2563eb"
-            emissiveIntensity={0.45}
-            metalness={0.2}
-            roughness={0.8}
-          />
-        </mesh>
-
-        <group position={[0, 0.15, 0.045]}>
-          <CodeScreen />
-        </group>
-
-        {/* Keyboard */}
-        <mesh position={[0, -0.28, 0.42]} rotation={[0.18, 0, 0]}>
-          <boxGeometry args={[1.35, 0.04, 0.42]} />
-          <meshStandardMaterial color="#1e293b" metalness={0.6} roughness={0.35} />
-        </mesh>
-
-        {/* Coffee mug accent */}
-        <mesh position={[1.15, -0.2, 0.35]}>
-          <cylinderGeometry args={[0.09, 0.08, 0.18, 12]} />
-          <meshStandardMaterial
-            color="#334155"
-            emissive="#f59e0b"
-            emissiveIntensity={0.15}
-          />
-        </mesh>
-      </Float>
-    </group>
-  );
-}
-
-/* ─── Orbiting tech chips (6 meshes — lightweight) ─── */
-const CHIP_DATA = [
-  { color: "#61dafb", label: "React" },
-  { color: "#8b5cf6", label: "PHP" },
-  { color: "#22c55e", label: "Node" },
-  { color: "#f97316", label: "MySQL" },
-  { color: "#ec4899", label: "Shopify" },
-  { color: "#06b6d4", label: "API" },
-];
-
-function TechOrbit({ mouse }: { mouse: React.RefObject<{ x: number; y: number }> }) {
-  const chips = useRef<THREE.Group>(null);
-  const radius = 2.35;
-
-  useFrame((state) => {
-    if (!chips.current) return;
-    const t = state.clock.elapsedTime * 0.35;
-    chips.current.rotation.y = t + mouse.current.x * 0.12;
-
-    chips.current.children.forEach((child, i) => {
-      const a = (i / CHIP_DATA.length) * Math.PI * 2 + t;
-      const y = Math.sin(t * 1.5 + i) * 0.18;
-      child.position.set(Math.cos(a) * radius, y + 0.15, Math.sin(a) * radius);
-      child.lookAt(0, child.position.y, 0);
-    });
-  });
-
-  return (
-    <group ref={chips}>
-      {CHIP_DATA.map((chip) => (
-        <group key={chip.label}>
-          <mesh>
-            <boxGeometry args={[0.38, 0.22, 0.06]} />
+    <>
+      {list.map((chip, i) => (
+        <Float
+          key={i}
+          speed={1.5 + i * 0.2}
+          rotationIntensity={1.2}
+          floatIntensity={1.2}
+          position={chip.pos as unknown as [number, number, number]}
+        >
+          <RoundedBox args={[0.42, 0.26, 0.06]} radius={0.04} smoothness={3}>
             <meshStandardMaterial
               color={chip.color}
               emissive={chip.color}
-              emissiveIntensity={0.55}
-              metalness={0.4}
-              roughness={0.35}
+              emissiveIntensity={0.6}
+              metalness={0.5}
+              roughness={0.3}
             />
-          </mesh>
-          <mesh position={[0, 0, 0.04]}>
-            <planeGeometry args={[0.28, 0.1]} />
+          </RoundedBox>
+          <mesh position={[0, 0, 0.035]}>
+            <planeGeometry args={[0.3, 0.12]} />
             <meshBasicMaterial color="#0f172a" transparent opacity={0.85} />
           </mesh>
-        </group>
+          {[0.05, 0, -0.03].map((y, j) => (
+            <mesh key={j} position={[-0.04 + j * 0.02, y, 0.04]}>
+              <planeGeometry args={[0.18 - j * 0.04, 0.012]} />
+              <meshBasicMaterial color={chip.color} />
+            </mesh>
+          ))}
+        </Float>
       ))}
-    </group>
-  );
-}
-
-/* ─── Lightweight particles ─── */
-function SoftParticles() {
-  const ref = useRef<THREE.Points>(null);
-  const count = 45;
-
-  const positions = useMemo(() => {
-    const arr = new Float32Array(count * 3);
-    for (let i = 0; i < count; i++) {
-      arr[i * 3] = (Math.random() - 0.5) * 7;
-      arr[i * 3 + 1] = (Math.random() - 0.5) * 5;
-      arr[i * 3 + 2] = (Math.random() - 0.5) * 4;
-    }
-    return arr;
-  }, []);
-
-  useFrame((state) => {
-    if (!ref.current) return;
-    ref.current.rotation.y = state.clock.elapsedTime * 0.015;
-  });
-
-  return (
-    <points ref={ref}>
-      <bufferGeometry>
-        <bufferAttribute attach="attributes-position" args={[positions, 3]} />
-      </bufferGeometry>
-      <pointsMaterial
-        size={0.035}
-        color="#93c5fd"
-        transparent
-        opacity={0.65}
-        sizeAttenuation
-        depthWrite={false}
-      />
-    </points>
-  );
-}
-
-/* ─── Simple floor grid (cheap GridHelper) ─── */
-function FloorGrid() {
-  const grid = useMemo(() => {
-    const g = new THREE.GridHelper(12, 16, "#1e40af", "#0c1929");
-    g.position.y = -0.85;
-    return g;
-  }, []);
-
-  return <primitive object={grid} />;
-}
-
-/* ─── Floating code symbols { } <> ─── */
-function CodeSymbols() {
-  const group = useRef<THREE.Group>(null);
-
-  const symbols = useMemo(
-    () => [
-      { pos: [-2.2, 1.1, -0.5] as [number, number, number], scale: 0.2 },
-      { pos: [2.4, 0.8, -0.8] as [number, number, number], scale: 0.16 },
-      { pos: [-1.8, -0.5, 0.6] as [number, number, number], scale: 0.14 },
-    ],
-    []
-  );
-
-  useFrame((state) => {
-    if (!group.current) return;
-    const t = state.clock.elapsedTime;
-    group.current.children.forEach((child, i) => {
-      child.position.y = symbols[i].pos[1] + Math.sin(t + i * 2) * 0.08;
-      child.rotation.y = t * 0.3 + i;
-    });
-  });
-
-  return (
-    <group ref={group}>
-      {symbols.map((s, i) => (
-        <mesh key={i} position={s.pos} scale={s.scale}>
-          <torusGeometry args={[1, 0.08, 6, 12]} />
-          <meshBasicMaterial
-            color={i === 0 ? "#22d3ee" : i === 1 ? "#a78bfa" : "#f472b6"}
-            transparent
-            opacity={0.7}
-            wireframe
-          />
-        </mesh>
-      ))}
-    </group>
-  );
-}
-
-function SceneContent() {
-  const mouse = useMouseParallax();
-  const reducedMotion = usePrefersReducedMotion();
-
-  if (reducedMotion) {
-    return (
-      <>
-        <ambientLight intensity={0.6} />
-        <mesh position={[0, 0, 0]}>
-          <boxGeometry args={[1.5, 1, 0.1]} />
-          <meshStandardMaterial color="#1e40af" emissive="#3b82f6" emissiveIntensity={0.3} />
-        </mesh>
-      </>
-    );
-  }
-
-  return (
-    <>
-      <ambientLight intensity={0.35} />
-      <directionalLight position={[4, 6, 5]} intensity={0.9} color="#93c5fd" />
-      <pointLight position={[-3, 2, 2]} intensity={0.4} color="#c084fc" />
-
-      <FloorGrid />
-      <SoftParticles />
-      <DevWorkstation mouse={mouse} />
-      <TechOrbit mouse={mouse} />
-      <CodeSymbols />
     </>
   );
 }
 
-export function HeroScene() {
+/* ─── Rig: parallax from pointer, drift away on scroll ─── */
+function Rig({
+  pointer,
+  scroll,
+  children,
+}: {
+  pointer: Vec2Ref;
+  scroll: Vec2Ref;
+  children: React.ReactNode;
+}) {
+  const group = useRef<THREE.Group>(null);
+
+  useFrame((state) => {
+    const g = group.current;
+    if (!g) return;
+    const s = scroll.current.y;
+    const t = state.clock.elapsedTime;
+    g.rotation.y = THREE.MathUtils.lerp(g.rotation.y, pointer.current.x * 0.4 + t * 0.05 + s * 1.2, 0.05);
+    g.rotation.x = THREE.MathUtils.lerp(g.rotation.x, -pointer.current.y * 0.25 + s * 0.4, 0.05);
+    g.position.y = THREE.MathUtils.lerp(g.position.y, s * 1.2, 0.08);
+    const scale = THREE.MathUtils.lerp(g.scale.x, 1 - s * 0.35, 0.08);
+    g.scale.setScalar(scale);
+  });
+
+  return <group ref={group}>{children}</group>;
+}
+
+function SceneContent({ compact }: { compact: boolean }) {
+  const { pointer, scroll } = useSceneInputs();
+
+  const lights = useMemo(
+    () => (
+      <>
+        <ambientLight intensity={0.2} />
+        <directionalLight position={[4, 5, 5]} intensity={1.6} color="#bfdbfe" />
+        <pointLight position={[-3, -2, 2]} intensity={14} color="#c084fc" />
+        <pointLight position={[3, 1, 3]} intensity={10} color="#22d3ee" />
+      </>
+    ),
+    []
+  );
+
   return (
-    <div className="relative z-0 h-full w-full">
-      {/* CSS glow — zero GPU cost */}
+    <>
+      {lights}
+      <Rig pointer={pointer} scroll={scroll}>
+        <Core compact={compact} />
+        {RINGS.map((ring, i) => (
+          <OrbitRing key={i} {...ring} />
+        ))}
+        <TechChips compact={compact} />
+      </Rig>
+      <Sparkles
+        count={compact ? 40 : 90}
+        scale={[7, 5, 4]}
+        size={compact ? 2.5 : 2}
+        speed={0.35}
+        opacity={0.7}
+        color="#93c5fd"
+      />
+    </>
+  );
+}
+
+function StaticScene() {
+  return (
+    <>
+      <ambientLight intensity={0.6} />
+      <directionalLight position={[4, 5, 5]} intensity={1} />
+      <mesh>
+        <icosahedronGeometry args={[1, 2]} />
+        <meshStandardMaterial color="#1e40af" emissive="#3b82f6" emissiveIntensity={0.3} flatShading />
+      </mesh>
+    </>
+  );
+}
+
+export function HeroScene({ compact = false }: { compact?: boolean }) {
+  const wrapper = useRef<HTMLDivElement>(null);
+  const reducedMotion = usePrefersReducedMotion();
+  const [inView, setInView] = useState(true);
+  const [dpr, setDpr] = useState(compact ? 1 : 1.5);
+
+  // Stop rendering when the hero is off-screen — saves battery on phones
+  useEffect(() => {
+    const el = wrapper.current;
+    if (!el) return;
+    const io = new IntersectionObserver(([entry]) => setInView(entry.isIntersecting), {
+      threshold: 0,
+    });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+
+  return (
+    <div ref={wrapper} className="relative h-full w-full">
       <div
-        className="pointer-events-none absolute inset-0 rounded-full opacity-60"
+        className="pointer-events-none absolute inset-0"
         style={{
           background:
-            "radial-gradient(ellipse at 55% 45%, rgba(59,130,246,0.25) 0%, rgba(139,92,246,0.08) 40%, transparent 70%)",
+            "radial-gradient(circle at 50% 50%, rgba(59,130,246,0.28) 0%, rgba(139,92,246,0.1) 35%, transparent 65%)",
         }}
         aria-hidden
       />
       <Canvas
-        camera={{ position: [0, 0.35, 4.2], fov: 42 }}
-        dpr={[1, 1.25]}
+        camera={{ position: [0, 0, compact ? 7 : 6.2], fov: 45 }}
+        dpr={dpr}
         gl={{
-          antialias: true,
+          antialias: !compact,
           alpha: true,
           powerPreference: "high-performance",
           stencil: false,
         }}
-        frameloop="always"
+        frameloop={inView && !reducedMotion ? "always" : "demand"}
         style={{ background: "transparent" }}
       >
+        <PerformanceMonitor
+          onDecline={() => setDpr(1)}
+          onIncline={() => setDpr(compact ? 1.25 : 1.75)}
+        />
         <Suspense fallback={null}>
-          <SceneContent />
+          {reducedMotion ? <StaticScene /> : <SceneContent compact={compact} />}
         </Suspense>
       </Canvas>
     </div>
